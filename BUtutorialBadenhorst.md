@@ -1,0 +1,455 @@
+Bayesian Updating Tutorial with Badenhorst et al. (2023) data set
+================
+Tara Lind
+
+## Badenhorst et al. (2023) paper
+
+In the original Badenhorst et al. (2023) study, the primary aim was to
+compare basal CRP levels between two groups of female athletes — 8 using
+the oral contraceptive pill (OCP) and 8 who were eumenorrheic (natural
+menstrual cycle). Each participant was tested on four different days
+throughout the menstrual or pill cycle.
+
+The main conclusion of this paper was the effect of group (p\<0.01),
+with OCP users consistently exhibiting higher CRP levels than
+eumenorrheic participants, regardless of the day of testing. Generalised
+linear mixed models with a Gamma distribution and log link function were
+used to conduct this analysis. Models were fit with fixed effects for
+menstrual cycle day and group (OCP users and non-OCP users) and a random
+intercept per participant.
+
+## Bayesian Analysis
+
+The goal of this analysis is to replicate and quantify this finding
+using a Bayesian framework. We will compare two models: - Model 1:
+includes both group and day as predictors - Model 2: includes only day
+(i.e. no group effect)
+
+This allows us to ask: how much more likely is the data under the model
+that assumes group differences, versus one that does not?
+
+We are not interested in modelling the interaction or temporal trends at
+this point, or other other blood markers in the data set. Instead, our
+focus is to isolate and evaluate the evidence for a group difference.
+
+### Load packages
+
+``` r
+library(readxl)
+library(brms)
+library(bridgesampling)
+library(tidyverse)
+library(lme4)
+library(ggResidpanel)
+library(car)
+library(tidybayes)
+library(posterior)
+library(kableExtra)
+```
+
+### Data
+
+``` r
+# load in the data
+data.long.all <- read_excel("Badenhorst_2023_Dataset.xlsx", sheet = "Data")
+
+# convert ID, day and group into factors
+data.long.all$ID <- factor(data.long.all$ID)
+data.long.all$DAY <- factor(data.long.all$DAY)
+data.long.all$GROUP <- factor(data.long.all$GROUP,
+                          labels=c("Natural", "OCP"))
+```
+
+Data was retrieved from
+<https://github.com/AndyGovus23/Badenhorst-et-al.-2023-_Iron_Sex_Hormones>.
+The data is already in long format, as it contains one observation (one
+participant at one time point) per row. The variables we will be using
+include a participant identifier (ID), C-reactive protein level (CRP),
+day of testing (DAY), and a group variable indicating whether that
+participant is an OCP user or natural (GROUP).
+
+### Fitting Bayesian models
+
+We will fit Bayesian hierarchical (mixed-effects) models using the
+function brm() from the brms package.
+
+``` r
+# model 1 - day and group as predictors
+model_with_group <- brm(
+  CRP ~ DAY + GROUP + (1 | ID),
+  data = data.long.all,
+  family = Gamma(link = "log"),
+  chains = 4, cores = 4, iter = 4000,
+  control = list(adapt_delta = 0.95),
+  save_pars = save_pars(all = TRUE)
+)
+
+# model 2 - day as the only predictor
+model_without_group <- brm(
+  CRP ~ DAY + (1 | ID),
+  data = data.long.all,
+  family = Gamma(link = "log"),
+  chains = 4, cores = 4, iter = 4000,
+  control = list(adapt_delta = 0.95),
+  save_pars = save_pars(all = TRUE)
+)
+```
+
+- The first argument specifies the model formula. CRP is the response
+  variable. DAY and GROUP are included as fixed effects, and (1 \| ID)
+  adds a random intercept for each participant. This accounts for the
+  repeated measures structure, recognising that multiple observations
+  from the same participant are not independent.
+
+- Badenhorst et al. (2023) note that CRP is non-normally distributed.
+  Given that CRP values are strictly positive and right-skewed, we use a
+  Gamma distribution with a log link function: family = Gamma(link =
+  “log”).
+
+- MCMC settings:
+
+- chains = 4: Run 4 independent Markov Chain Monte Carlo (MCMC) chains.
+
+- cores = 4: Use 4 CPU cores to run the chains in parallel.
+
+- iter = 4000: Each chain runs for 4000 iterations, resulting in 16,000
+  draws (with half typically used as warm-up). These settings help
+  ensure stable and reliable posterior estimates.
+
+- control = list(adapt_delta = 0.95): Raises the target acceptance rate
+  of the NUTS sampler to reduce the risk of divergent transitions, which
+  can occur in more complex or non-linear models (especially with skewed
+  distributions like Gamma).
+
+- save_pars = save_pars(all = TRUE): Saves all posterior samples and
+  internal model objects. This is necessary for computing Bayes factors
+  later.
+
+The first model (model_with_group) assesses whether CRP levels differ
+between the two groups (OCP vs eumenorrheic), after accounting for the
+effect of day and individual variation. The second model
+(model_without_group) removes GROUP from the formula. It assumes the
+mean CRP levels are the same across groups, after controlling for day
+and participant.
+
+#### Priors
+
+In this analysis, we did not manually specify priors, so brms applied
+its default weakly informative priors. These are designed to support
+convergence and regularise parameter estimation, particularly useful
+when sample sizes are modest or the model structure is complex.
+
+### Comparing models
+
+The Bayes Factor quantifies how much more likely the data is under one
+model compared to the other:
+
+BF_10 = p(data\|Model2) / p(data\|Model1)
+
+We can compute the Bayes Factor using the bayes_factor() function from
+the brms package, which implements bridge sampling to estimate marginal
+likelihoods.
+
+``` r
+bf_result <- bayes_factor(model_with_group, model_without_group)
+```
+
+``` r
+print(bf_result)
+```
+
+    ## Estimated Bayes factor in favor of model_with_group over model_without_group: 569.67376
+
+This result means that the model that includes group is over 500 more
+likely than the model without group, given the observed data. This
+constitutes very strong evidence in favour of the hypothesis that CRP
+levels differ between OCP users and non-OCP users, even after
+controlling for measurement day and individual participant variability.
+
+Conventionally, Bayes Factors are interpreted with the following
+framework:
+
+``` r
+bf_table <- data.frame(
+  `Bayes Factor` = c("1–3", "3–10", "10–30", "30–100", ">100"),
+  `Evidence Strength` = c("Anecdotal", "Moderate", "Strong", "Very strong", "Extreme")
+)
+kable(bf_table, caption = "Interpretation of Bayes Factors (Stefan et al. 2019)")
+```
+
+To better understand the magnitude and uncertainty of the group effect
+on CRP, we can visualise the posterior distribution of the model
+parameter for the group variable. The posterior distribution reflects
+our updated beliefs, after seeing the data, about how much higher (or
+lower) CRP is in OCP users relative to natural athletes.
+
+Specifically, we exponentiate the posterior samples of the coefficient
+for group, which gives us the multiplicative effect of being in the OCP
+group relative to the natural group.
+
+``` r
+as_draws_df(model_with_group) %>%
+  mutate(CRP_ratio = exp(b_GROUPOCP)) %>%
+  ggplot(aes(x = CRP_ratio)) +
+  stat_halfeye(.width = c(0.66, 0.95)) +
+  geom_vline(xintercept = 1, linetype = "dashed", 
+             colour = "red") + # no difference reference line
+  labs(
+    title = "Posterior distribution of CRP ratio (OCP / Natural)",
+    x = "Multiplicative effect on CRP", y = NULL
+  ) +
+  theme_minimal()
+```
+
+![](BUtutorialBadenhorst_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+
+The shaded area in this plot indicates the posterior distribution. The
+thicker bar along the x-axis is the 66% credible interval, and the
+thinner bar is the 95% credible interval.
+
+The 95% credible interval lies entirely above 1, indicating strong
+evidence that CRP levels are higher in the OCP group. While the
+posterior density tapers near 1, the probability that the true effect is
+null (i.e., no difference) is extremely low.
+
+The median of the posterior distribution for the CRP ratio is around
+4.5, indicating that the CRP levels in the OCP group are estimated to be
+approximately four and a half times higher than those in the natural
+(eumenorrheic) group.
+
+This Bayesian approach allows us to move beyond the binary threshold
+logic of traditional p-values (e.g., p \< 0.01). While Badenhorst et
+al. (2023) reported a statistically significant group difference, the
+Bayes Factor offers a clear, interpretable measure of evidence strength.
+Rather than simply saying the result is “significant,” we can now
+quantify how much more likely the data are under the model that includes
+the group effect.
+
+## Bayesian Updating
+
+Another strength of the Bayesian approach is the ability to accumulate
+evidence as new data is added. Unlike traditional frequentist methods,
+which often require a fixed sample size and a single hypothesis test,
+Bayesian methods allow us to continuously update our beliefs and
+quantify evidence at each stage of data collection.
+
+To illustrate this, we will now simulate the process of iteratively
+collecting data from participants from each group and updating the Bayes
+Factor.
+
+``` r
+set.seed(123) # for reproducability
+
+# Split participants into groups and put them into a random order
+natural_ids <- sample(unique(data.long.all$ID[data.long.all$GROUP == "Natural"]))
+ocp_ids     <- sample(unique(data.long.all$ID[data.long.all$GROUP == "OCP"]))
+
+max_n <- min(length(natural_ids), length(ocp_ids))
+
+# Initial data: 1 participant from each group
+initial_ids <- c(natural_ids[1], ocp_ids[1])
+initial_data <- data.long.all %>%
+  filter(ID %in% initial_ids)
+
+# Fit initial models
+
+# model with group
+full <- brm(
+  formula = CRP ~ DAY + GROUP + (1 | ID),
+  data = initial_data,
+  family = Gamma(link = "log"),
+  chains = 2, iter = 2000, refresh = 0,
+  save_pars = save_pars(all = TRUE),
+  silent = TRUE
+)
+
+# model without group
+reduced <- brm(
+  formula = CRP ~ DAY + (1 | ID),
+  data = initial_data,
+  family = Gamma(link = "log"),
+  chains = 2, iter = 2000, refresh = 0,
+  save_pars = save_pars(all = TRUE),
+  silent = TRUE
+)
+
+# Storage for BF results
+bf_values <- numeric()
+bf_values[1] <- bayes_factor(full, reduced)$bf
+
+# Iteratively update both models
+for (i in 2:max_n) {
+  message("Running iteration: ", i, " (", 2*i, " total participants)")
+
+  # Add one new participant from each group
+  selected_ids <- c(natural_ids[1:i], ocp_ids[1:i])
+  new_data <- data.long.all %>%
+    filter(ID %in% selected_ids)
+
+  # Use update() to avoid recompilation
+  full <- update(full, newdata = new_data, recompile = FALSE, refresh = 0, silent = TRUE)
+  reduced <- update(reduced, newdata = new_data, recompile = FALSE, refresh = 0, silent = TRUE)
+
+  # Calculate Bayes Factor
+  bf_values[i] <- bayes_factor(full, reduced)$bf
+}
+
+# Compile results for plotting
+bf_df <- tibble(
+  total_participants = 2 * (1:max_n),
+  bayes_factor = bf_values
+)
+```
+
+In this code, we begin by fitting two initial models using data from the
+first participant in each group. At each subsequent iteration, we
+incrementally add one participant from each group and use the update()
+function to refit the models on the expanded dataset without recompiling
+the Stan code. We then compute the Bayes Factor comparing the full model
+(with GROUP) to the reduced model (without GROUP), and store these
+values. Finally, we plot how the Bayes Factor evolves as the total
+number of participants increases.
+
+``` r
+# Plotting
+
+# Making the y-axis have interpretable/meaningful ticks
+breaks_vals <- c(1/100, 1/30, 1/10, 1/3, 1, 3, 10, 30, 100, 300)
+fraction_labels <- c("1/100", "1/30", "1/10", "1/3", "1", "3", "10", "30", "100", "300")
+
+ggplot(bf_df, aes(x = total_participants, y = bayes_factor)) +
+  geom_line(color = "steelblue", size = 1.2) +
+  geom_point(color = "steelblue", size = 3) +
+  scale_y_log10(
+    breaks = breaks_vals,
+    labels = fraction_labels,
+    limits = c(0.01, max(bf_df$bayes_factor) * 1.1)
+  ) +
+  labs(
+    title = "Bayes Factor evidence for GROUP effect\nas participants are added equally from both groups",
+    x = "Total Participants",
+    y = "Bayes Factor (log scale)"
+  ) +
+  annotation_logticks(sides = "l") +
+  theme_minimal(base_size = 14)
+```
+
+![](BUtutorialBadenhorst_files/figure-gfm/unnamed-chunk-9-1.png)<!-- -->
+
+This resultant plot highlights that even early in data collection (with
+just a few participants per group), we can begin to quantify the
+strength of evidence. In this example, as more participants are added,
+the Bayes Factor steadily increases, moving well beyond the common
+thresholds for strong evidence (Bayes Factors \> 10) after 6
+participants are included in the analysis.
+
+### Validating with multiple random orderings
+
+To ensure that our results are not dependent on the particular order in
+which participants were sampled and to help validate the robustness of
+this analysis, here we repeat the simulation described above across five
+independent random orderings.
+
+``` r
+set.seed(123) # for reproducability
+
+n_runs <- 5  # Number of random orderings to do
+bf_all <- list()  # To store all runs results
+
+for (run in 1:n_runs) {
+  message("Starting run ", run)
+
+  # Shuffle IDs independently each run
+  natural_ids <- sample(unique(data.long.all$ID[data.long.all$GROUP == "Natural"]))
+  ocp_ids     <- sample(unique(data.long.all$ID[data.long.all$GROUP == "OCP"]))
+
+  max_n <- min(length(natural_ids), length(ocp_ids))
+  bf_values <- numeric(max_n)
+
+  for (i in 1:max_n) {
+    message("Run ", run, " iteration: ", i, " (", 2*i, " total participants)")
+
+    selected_ids <- c(natural_ids[1:i], ocp_ids[1:i])
+    subset_data <- data.long.all %>% filter(ID %in% selected_ids)
+
+    full <- brm(
+      formula = CRP ~ DAY + GROUP + (1 | ID),
+      data = subset_data,
+      family = Gamma(link = "log"),
+      chains = 2, iter = 2000, refresh = 0,
+      save_pars = save_pars(all = TRUE), silent = TRUE
+    )
+
+    reduced <- brm(
+      formula = CRP ~ DAY + (1 | ID),
+      data = subset_data,
+      family = Gamma(link = "log"),
+      chains = 2, iter = 2000, refresh = 0,
+      save_pars = save_pars(all = TRUE), silent = TRUE
+    )
+
+    bf_values[i] <- bayes_factor(full, reduced)$bf
+  }
+
+  bf_all[[run]] <- tibble(
+    run = paste0("Run ", run),
+    total_participants = 2 * (1:max_n),
+    bayes_factor = bf_values
+  )
+}
+```
+
+``` r
+# Combine all runs into one dataframe
+bf_df_all <- bind_rows(bf_all)
+
+# Making the y-axis have interpretable/meaningful ticks
+breaks_vals <- c(1/100, 1/30, 1/10, 1/3, 1, 3, 10, 30, 100, 300)
+fraction_labels <- c("1/100", "1/30", "1/10", "1/3", "1", "3", "10", "30", "100", "300")
+
+# Plot showing the multiple runs, color by run
+ggplot(bf_df_all, aes(x = total_participants, y = bayes_factor, color = run)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  scale_y_log10(
+    breaks = breaks_vals,
+    labels = fraction_labels,
+    limits = c(0.01, max(bf_df_all$bayes_factor) * 1.1)
+  ) +
+  labs(
+    subtitle = "Bayes Factor evidence for GROUP effect\nas participants are added equally from both groups",
+    x = "Total Participants",
+    y = "Bayes Factor (log scale)",
+    color = "Random Order"
+  ) +
+  annotation_logticks(sides = "l") +
+  theme_minimal(base_size = 14)
+```
+
+![](BUtutorialBadenhorst_files/figure-gfm/unnamed-chunk-11-1.png)<!-- -->
+
+This plot shows the Bayes Factor trajectories across all five runs.
+Despite the randomness of each ordering, all runs follow a similar
+trajectory. The Bayes Factors consistently increase as more data
+accumulates, reinforcing strong evidence in favour of including the
+group effect.
+
+## Conclusion
+
+Bayesian updating allows us to quantify evidence dynamically, rather
+than waiting for the entire study to complete. This approach can
+therefore support data efficiency, save resources and time, and allow
+for dynamic decision-making. Bayesian updating thus offers a powerful
+framework for real-time evidence assessment and efficient study design.
+
+## References
+
+Badenhorst, C. E., Govus, A. D., & Mündel, T. (2023). Does chronic oral
+contraceptive use detrimentally affect C-reactive protein or iron status
+for endurance-trained women? Physiological Reports, 11(14), e15777.
+<https://doi.org/https://doi.org/10.14814/phy2.15777>
+
+Stefan, A. M., Gronau, Q. F., Schönbrodt, F. D., & Wagenmakers, E.-J.
+(2019). A tutorial on Bayes Factor Design Analysis using an informed
+prior. Behavior Research Methods, 51(3), 1042-1058.
+<https://doi.org/10.3758/s13428-018-01189-8>
